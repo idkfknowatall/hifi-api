@@ -96,6 +96,7 @@ USE_PROXIES = os.getenv("USE_PROXIES", "False").lower() in ("true", "1", "yes")
 ROTATE_PROXIES_ON_REFRESH = os.getenv("ROTATE_PROXIES_ON_REFRESH", "False").lower() in ("true", "1", "yes")
 PROXIES_FILE = os.getenv("PROXIES_FILE", "proxies.txt")
 FALLBACK_TO_DIRECT_CONNECTION = os.getenv("FALLBACK_TO_DIRECT_CONNECTION", "False").lower() in ("true", "1", "yes")
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "2"))
 
 async def test_proxy(proxy_url: str) -> bool:
     try:
@@ -230,7 +231,7 @@ async def refresh_tidal_token(cred: Optional[dict] = None):
         if USE_PROXIES and ROTATE_PROXIES_ON_REFRESH:
             await update_global_client(force_new_proxy=True)
 
-        max_retries = 2 if USE_PROXIES else 1
+        max_retries = MAX_RETRIES if USE_PROXIES else 1
         for attempt in range(max_retries):
             try:
                 client = await get_http_client()
