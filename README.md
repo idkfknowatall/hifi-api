@@ -2,7 +2,7 @@
 
 ![Running on BiniLossless.](https://sachinsenal0x64.github.io/picx-images-hosting/hifi.5fkz01pkwn.webp)
 
-<p align="center">Running on <a href="https://tidal.squid.wtf/">SQUID.WTF</a>.</p>
+<p align="center">Running on BiniLossless on <a href="https://tidal.qqdl.site/">qqdl.site</a>.</p>
 
 `hifi-api` is forked from the original project [sachinsenal0x64/hifi](https://github.com/sachinsenal0x64/hifi).
 
