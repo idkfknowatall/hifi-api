@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import asyncio
+import fastapi
 import json
 import os
 import random
@@ -415,6 +416,7 @@ async def authed_get_json(
     params: Optional[dict] = None,
     token: Optional[str] = None,
     cred: Optional[dict] = None,
+    extra_headers: Optional[dict] = None,
 ):
     """Perform an authenticated GET, retrying once on 401. Returns payload with updated token/cred."""
 
@@ -423,6 +425,8 @@ async def authed_get_json(
 
     client = await get_http_client()
     headers = {"authorization": f"Bearer {token}"}
+    if extra_headers:
+        headers.update({key: value for key, value in extra_headers.items() if value is not None})
 
     try:
         resp = await client.get(url, headers=headers, params=params)
@@ -444,6 +448,68 @@ async def authed_get_json(
         if isinstance(e, httpx.TimeoutException):
             raise HTTPException(status_code=429, detail="Upstream timeout")
         raise HTTPException(status_code=503, detail="Connection error to Tidal")
+
+
+def default_time_offset() -> str:
+    seconds = -time.timezone
+    if time.daylight and time.localtime().tm_isdst:
+        seconds = -time.altzone
+
+    sign = "+" if seconds >= 0 else "-"
+    seconds = abs(seconds)
+    hours, remainder = divmod(seconds, 3600)
+    minutes = remainder // 60
+    return f"{sign}{hours:02d}:{minutes:02d}"
+
+
+def build_home_request_params(
+    *,
+    country_code: str,
+    locale: str,
+    device_type: str,
+    platform: str,
+    time_offset: Optional[str],
+    cursor: Optional[str] = None,
+    offset: Optional[int] = None,
+    limit: Optional[int] = None,
+) -> dict:
+    params = {
+        "countryCode": country_code,
+        "locale": locale,
+        "deviceType": device_type,
+        "platform": platform,
+        "timeOffset": time_offset or default_time_offset(),
+    }
+
+    if cursor:
+        params["cursor"] = cursor
+    if offset is not None:
+        params["offset"] = offset
+    if limit is not None:
+        params["limit"] = limit
+
+    return params
+
+
+def normalize_home_view_all_path(path: str) -> str:
+    normalized_path = str(path or "").strip().lstrip("/")
+    if not normalized_path.startswith("home/pages/") or not normalized_path.endswith("/view-all"):
+        raise HTTPException(status_code=400, detail="Unsupported home view-all path")
+    return normalized_path
+
+
+def build_home_request_headers(referer: str) -> dict:
+    return {
+        "accept": "application/json",
+        "accept-language": "en-GB,en;q=0.9",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:149.0) Gecko/20100101 Firefox/149.0",
+        "referer": referer,
+        "x-tidal-client-version": "2026.4.9",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
+        "priority": "u=4",
+    }
 
 @app.get("/")
 async def index():
@@ -599,6 +665,63 @@ async def search(
             return await make_request(url, params=params)
 
     raise HTTPException(status_code=400, detail="Provide one of s, a, al, v, p, or i")
+
+
+@app.get("/home/feed")
+@app.get("/home/feed/")
+async def get_home_feed(
+    countryCode: str = Query(default=COUNTRY_CODE),
+    locale: str = Query(default="en_US"),
+    deviceType: str = Query(default="BROWSER"),
+    platform: str = Query(default="WEB"),
+    timeOffset: Optional[str] = Query(default=None),
+    cursor: Optional[str] = Query(default=None),
+):
+    payload, _, _ = await authed_get_json(
+        "https://tidal.com/v2/home/feed/static",
+        params=build_home_request_params(
+            country_code=countryCode,
+            locale=locale,
+            device_type=deviceType,
+            platform=platform,
+            time_offset=timeOffset,
+            cursor=cursor,
+        ),
+        extra_headers=build_home_request_headers("https://tidal.com/"),
+    )
+    return payload
+
+
+@app.get("/home/view-all")
+@app.get("/home/view-all/")
+async def get_home_view_all(
+    path: str = Query(..., description="TIDAL home view-all path such as home/pages/POPULAR_PLAYLISTS/view-all"),
+    countryCode: str = Query(default=COUNTRY_CODE),
+    locale: str = Query(default="en_US"),
+    deviceType: str = Query(default="BROWSER"),
+    platform: str = Query(default="WEB"),
+    timeOffset: Optional[str] = Query(default=None),
+    cursor: Optional[str] = Query(default=None),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=500),
+):
+    normalized_path = normalize_home_view_all_path(path)
+    referer_path = normalized_path if normalized_path.startswith("/") else f"/{normalized_path}"
+    payload, _, _ = await authed_get_json(
+        f"https://tidal.com/v2/{normalized_path}",
+        params=build_home_request_params(
+            country_code=countryCode,
+            locale=locale,
+            device_type=deviceType,
+            platform=platform,
+            time_offset=timeOffset,
+            cursor=cursor,
+            offset=offset,
+            limit=limit,
+        ),
+        extra_headers=build_home_request_headers(f"https://tidal.com{referer_path}"),
+    )
+    return payload
 
 @app.get("/album/")
 async def get_album(
