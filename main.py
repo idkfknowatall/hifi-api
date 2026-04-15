@@ -13,6 +13,7 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 import logging
 
@@ -108,6 +109,15 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def require_oadio_edge_secret(request: Request, call_next):
+    if OADIO_EDGE_SHARED_SECRET:
+        if request.headers.get("x-oadio-edge-secret") != OADIO_EDGE_SHARED_SECRET:
+            return JSONResponse({"detail": "Forbidden"}, status_code=403)
+
+    return await call_next(request)
+
+
 # Config (defaults act as fallback if token file missing)
 CLIENT_ID = os.getenv("CLIENT_ID", "")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET", "")
@@ -115,6 +125,7 @@ REFRESH_TOKEN: Optional[str] = os.getenv("REFRESH_TOKEN")
 USER_ID = os.getenv("USER_ID")
 TOKEN_FILE = os.getenv("TOKEN_FILE", "token.json")
 COUNTRY_CODE = os.getenv("COUNTRY_CODE", "US")
+OADIO_EDGE_SHARED_SECRET = os.getenv("OADIO_EDGE_SHARED_SECRET", "")
 
 USE_PROXIES = os.getenv("USE_PROXIES", "False").lower() in ("true", "1", "yes")
 ROTATE_PROXIES_ON_REFRESH = os.getenv("ROTATE_PROXIES_ON_REFRESH", "False").lower() in ("true", "1", "yes")
