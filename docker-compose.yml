@@ -2,7 +2,7 @@ services:
   web:
     build: .
     env_file:
-      - .env
+      - ${HIFI_API_ENV_FILE:-/etc/hifi-api-work.env}
     ports:
       - "0.0.0.0:8000:8000"
     volumes:

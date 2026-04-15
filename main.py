@@ -18,7 +18,14 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-load_dotenv()
+for env_path in (
+    os.getenv("HIFI_API_ENV_FILE"),
+    "/etc/hifi-api-work.env",
+    ".env",
+):
+    if env_path and os.path.exists(env_path):
+        load_dotenv(env_path)
+        break
 
 API_VERSION = "2.8"
 
