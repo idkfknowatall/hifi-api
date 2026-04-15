@@ -469,6 +469,7 @@ def build_home_request_params(
     device_type: str,
     platform: str,
     time_offset: Optional[str],
+    vibe: Optional[str] = None,
     cursor: Optional[str] = None,
     offset: Optional[int] = None,
     limit: Optional[int] = None,
@@ -487,8 +488,15 @@ def build_home_request_params(
         params["offset"] = offset
     if limit is not None:
         params["limit"] = limit
+    if vibe:
+        params["vibe"] = vibe
 
     return params
+
+
+def normalize_home_feed_vibe(vibe: Optional[str]) -> str:
+    normalized_vibe = str(vibe or "").strip().lower()
+    return normalized_vibe or "static"
 
 
 def normalize_home_view_all_path(path: str) -> str:
@@ -675,19 +683,24 @@ async def get_home_feed(
     deviceType: str = Query(default="BROWSER"),
     platform: str = Query(default="WEB"),
     timeOffset: Optional[str] = Query(default=None),
+    vibe: Optional[str] = Query(default="static"),
     cursor: Optional[str] = Query(default=None),
 ):
+    normalized_vibe = normalize_home_feed_vibe(vibe)
     payload, _, _ = await authed_get_json(
-        "https://tidal.com/v2/home/feed/static",
+        f"https://tidal.com/v2/home/feed/{normalized_vibe}",
         params=build_home_request_params(
             country_code=countryCode,
             locale=locale,
             device_type=deviceType,
             platform=platform,
             time_offset=timeOffset,
+            vibe=normalized_vibe if normalized_vibe != "static" else None,
             cursor=cursor,
         ),
-        extra_headers=build_home_request_headers("https://tidal.com/"),
+        extra_headers=build_home_request_headers(
+            "https://tidal.com/" if normalized_vibe == "static" else f"https://tidal.com/?vibe={normalized_vibe}"
+        ),
     )
     return payload
 
@@ -701,11 +714,13 @@ async def get_home_view_all(
     deviceType: str = Query(default="BROWSER"),
     platform: str = Query(default="WEB"),
     timeOffset: Optional[str] = Query(default=None),
+    vibe: Optional[str] = Query(default="static"),
     cursor: Optional[str] = Query(default=None),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=500),
 ):
     normalized_path = normalize_home_view_all_path(path)
+    normalized_vibe = normalize_home_feed_vibe(vibe)
     referer_path = normalized_path if normalized_path.startswith("/") else f"/{normalized_path}"
     payload, _, _ = await authed_get_json(
         f"https://tidal.com/v2/{normalized_path}",
@@ -715,11 +730,16 @@ async def get_home_view_all(
             device_type=deviceType,
             platform=platform,
             time_offset=timeOffset,
+            vibe=normalized_vibe if normalized_vibe != "static" else None,
             cursor=cursor,
             offset=offset,
             limit=limit,
         ),
-        extra_headers=build_home_request_headers(f"https://tidal.com{referer_path}"),
+        extra_headers=build_home_request_headers(
+            f"https://tidal.com{referer_path}"
+            if normalized_vibe == "static"
+            else f"https://tidal.com/{referer_path.lstrip('/')}?vibe={normalized_vibe}"
+        ),
     )
     return payload
 
