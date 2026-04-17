@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-API_VERSION = "2.8"
+API_VERSION = "2.9"
 
 # Shared HTTP client is created in app lifespan for connection reuse
 _http_client: Optional[httpx.AsyncClient] = None
@@ -45,6 +45,7 @@ def _build_http_client(proxy_url: Optional[str] = None) -> httpx.AsyncClient:
     # Pack common settings into a dictionary to keep things DRY
     client_kwargs = {
         "http2": True,
+        "headers": _TIDAL_DEFAULT_HEADERS,
         "timeout": httpx.Timeout(connect=3.0, read=12.0, write=8.0, pool=12.0),
         "limits": httpx.Limits(
             max_keepalive_connections=500,
@@ -117,6 +118,19 @@ MAX_PROXY_CANDIDATES = 10
 # Maximum number of concurrent proxy tests inside get_working_proxy()
 _PROXY_TEST_CONCURRENCY = 5
 _max_retries_raw = os.getenv("MAX_RETRIES", "2")
+USER_AGENT = os.getenv(
+    "USER_AGENT",
+    "Dalvik/2.1.0 (Linux; U; Android 14; SM-S928B Build/AP2A.240905.003)",
+)
+
+_TIDAL_DEFAULT_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "application/json",
+    "Accept-Encoding": "gzip",
+    "Accept-Language": "en-US,en;q=0.9",
+    "X-Platform": "android",
+    "X-Tidal-Platform": "android",
+}
 try:
     MAX_RETRIES = int(_max_retries_raw)
 except ValueError:

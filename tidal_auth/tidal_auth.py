@@ -37,10 +37,14 @@ class Auth(Hifi):
     async def get_auth_response(self):
         data = {"client_id": self.client_id, "scope": self.scope}
         headers = {
-            "User-Agent": "Mozilla/5.0 (Linux; Android 8.0.0; SM-G965F Build/R16NW) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/65.0.3325.109 Mobile Safari/537.36"
+            "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 14; SM-S928B Build/AP2A.240905.003)",
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "Accept-Language": "en-US,en;q=0.9",
+            "X-Platform": "android",
         }
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(headers=headers) as client:
             response = await client.post(self.url, data=data, headers=headers)
             # We handle status codes in the main loop now
 
@@ -71,7 +75,14 @@ def save_token_entry(entry):
 
 
 async def poll_for_authorization(url, data, auth):
-    async with httpx.AsyncClient() as client:
+    headers = {
+        "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 14; SM-S928B Build/AP2A.240905.003)",
+        "Accept": "application/json",
+        "Accept-Encoding": "gzip",
+        "Accept-Language": "en-US,en;q=0.9",
+        "X-Platform": "android",
+    }
+    async with httpx.AsyncClient(headers=headers) as client:
         while True:
             response = await client.post(url, data=data, auth=auth)
             if response.status_code == 200:
@@ -183,10 +194,18 @@ async def main():
 
         url3 = f"https://api.tidal.com/v1/tracks/493546859/playbackinfopostpaywall?countryCode=en_US&audioquality={HI_RES}&playbackmode=STREAM&assetpresentation=FULL"
 
-        headers = {"authorization": f"Bearer {acs_tok}"}
+        headers = {
+            "authorization": f"Bearer {acs_tok}",
+            "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 14; SM-S928B Build/AP2A.240905.003)",
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "Accept-Language": "en-US,en;q=0.9",
+            "X-Platform": "android",
+            "X-Tidal-Platform": "android",
+        }
 
-        async with httpx.AsyncClient() as client:
-            res3 = await client.get(url3, headers=headers)
+        async with httpx.AsyncClient(headers=headers) as client:
+            res3 = await client.get(url3)
 
         rich.print(res3.json())
         print("TOKEN IS VALID")
