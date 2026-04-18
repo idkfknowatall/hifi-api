@@ -732,6 +732,79 @@ def build_home_page_referer(path: str = "/", vibe: Optional[str] = None) -> str:
     return f"{base}{'&' if '?' in base else '?'}vibe={normalized_vibe}"
 
 
+def find_search_section(source: object, key: str, visited: Optional[set[int]] = None):
+    if not isinstance(source, (dict, list)):
+        return None
+
+    if visited is None:
+        visited = set()
+
+    if isinstance(source, list):
+        for entry in source:
+            found = find_search_section(entry, key, visited)
+            if found:
+                return found
+        return None
+
+    object_id = id(source)
+    if object_id in visited:
+        return None
+    visited.add(object_id)
+
+    items = source.get("items")
+    if isinstance(items, list):
+        return source
+
+    if key in source:
+        found = find_search_section(source[key], key, visited)
+        if found:
+            return found
+
+    for value in source.values():
+        found = find_search_section(value, key, visited)
+        if found:
+            return found
+
+    return None
+
+
+def build_search_section_response(section: Optional[dict]) -> dict:
+    items = section.get("items", []) if isinstance(section, dict) else []
+    return {
+        "items": items,
+        "limit": section.get("limit", len(items)) if isinstance(section, dict) else len(items),
+        "offset": section.get("offset", 0) if isinstance(section, dict) else 0,
+        "totalNumberOfItems": section.get("totalNumberOfItems", len(items)) if isinstance(section, dict) else len(items),
+    }
+
+
+def extract_track_search_payload(payload: object) -> dict:
+    return build_search_section_response(find_search_section(payload, "tracks"))
+
+
+async def search_tracks_via_top_hits(
+    query: str,
+    *,
+    limit: int,
+    offset: int,
+    token: Optional[str] = None,
+    cred: Optional[dict] = None,
+):
+    payload, token, cred = await authed_get_json(
+        "https://api.tidal.com/v1/search/top-hits",
+        params={
+            "query": query,
+            "limit": limit,
+            "offset": offset,
+            "types": "TRACKS",
+            "countryCode": COUNTRY_CODE,
+        },
+        token=token,
+        cred=cred,
+    )
+    return extract_track_search_payload(payload), token, cred
+
+
 def build_home_request_headers(referer: str) -> dict:
     return {
         "accept": "application/json",
@@ -837,6 +910,7 @@ async def get_recommendations(id: int):
 
 @app.api_route("/search/", methods=["GET"])
 async def search(
+    q: Union[str, None] = Query(default=None),
     s: Union[str, None] = Query(default=None),
     a: Union[str, None] = Query(default=None),
     al: Union[str, None] = Query(default=None),
@@ -859,13 +933,23 @@ async def search(
             },
         )
 
+    if q:
+        return await make_request(
+            "https://api.tidal.com/v1/search",
+            params={
+                "query": q,
+                "limit": limit,
+                "offset": offset,
+                "types": "ARTISTS,ALBUMS,TRACKS,VIDEOS,PLAYLISTS",
+                "countryCode": COUNTRY_CODE,
+            },
+        )
+
+    if s:
+        payload, _, _ = await search_tracks_via_top_hits(s, limit=limit, offset=offset)
+        return {"version": API_VERSION, "data": payload}
+
     queries = (
-        (s, "https://api.tidal.com/v1/search/tracks", {
-            "query": s,
-            "limit": limit,
-            "offset": offset,
-            "countryCode": COUNTRY_CODE,
-        }),
         (a, "https://api.tidal.com/v1/search/top-hits", {
             "query": a,
             "limit": limit,
@@ -900,7 +984,7 @@ async def search(
         if value:
             return await make_request(url, params=params)
 
-    raise HTTPException(status_code=400, detail="Provide one of s, a, al, v, p, or i")
+    raise HTTPException(status_code=400, detail="Provide one of q, s, a, al, v, p, or i")
 
 
 @app.get("/home/feed")
@@ -1374,13 +1458,7 @@ async def get_cover(
         )
         return {"version": API_VERSION, "covers": [entry]}
 
-    search_data, token, cred = await authed_get_json(
-        "https://api.tidal.com/v1/search/tracks",
-        params={"countryCode": COUNTRY_CODE, "query": q, "limit": 10},
-        token=token,
-        cred=cred,
-    )
-
+    search_data, token, cred = await search_tracks_via_top_hits(q, limit=10, offset=0, token=token, cred=cred)
     items = search_data.get("items", [])[:10]
     if not items:
         raise HTTPException(status_code=404, detail="Cover not found")
