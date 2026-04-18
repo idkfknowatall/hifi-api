@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import asyncio
+import contextvars
 import fastapi
 import json
 import os
@@ -48,6 +49,13 @@ _proxies: List[str] = []
 
 # Cache of the last proxy confirmed to be working
 _last_known_good_proxy: Optional[str] = None
+
+_request_country_code: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "request_country_code", default=None
+)
+_request_explicit_country_code: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "request_explicit_country_code", default=None
+)
 
 
 def _build_http_client(proxy_url: Optional[str] = None) -> httpx.AsyncClient:
@@ -121,6 +129,35 @@ async def require_oadio_edge_secret(request: Request, call_next):
     return await call_next(request)
 
 
+def normalize_country_code(value: Optional[str]) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+
+    normalized = value.strip().upper()
+    if len(normalized) != 2 or not normalized.isalpha():
+        return None
+
+    return normalized
+
+
+@app.middleware("http")
+async def bind_request_country_context(request: Request, call_next):
+    request_country = (
+        normalize_country_code(request.headers.get("x-oadio-visitor-country"))
+        or normalize_country_code(request.headers.get("cf-ipcountry"))
+        or normalize_country_code(request.headers.get("cloudfront-viewer-country"))
+    )
+    explicit_country = normalize_country_code(request.query_params.get("countryCode"))
+
+    country_token = _request_country_code.set(request_country)
+    explicit_country_token = _request_explicit_country_code.set(explicit_country)
+    try:
+        return await call_next(request)
+    finally:
+        _request_country_code.reset(country_token)
+        _request_explicit_country_code.reset(explicit_country_token)
+
+
 # Config (defaults act as fallback if token file missing)
 CLIENT_ID = os.getenv("CLIENT_ID", "")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET", "")
@@ -158,6 +195,8 @@ DEV_MODE = os.getenv("DEV_MODE", "False").lower() in ("true", "1", "yes")
 _RATE_LIMIT_MAX_RETRIES = 3
 _RATE_LIMIT_BASE_DELAY = 1.0
 _RATE_LIMIT_MAX_DELAY = 10.0
+_UPSTREAM_5XX_BASE_DELAY = 0.5
+_UPSTREAM_5XX_MAX_DELAY = 3.0
 
 def _log_response(method: str, url: str, resp: httpx.Response):
     if not DEV_MODE:
@@ -429,11 +468,56 @@ async def get_tidal_token_for_cred(force_refresh: bool = False, cred: Optional[d
     return token, cred
 
 
+def resolve_country_code(country_code: Optional[str] = None) -> str:
+    default_country = normalize_country_code(COUNTRY_CODE) or "US"
+    normalized_country = normalize_country_code(country_code)
+    explicit_country = _request_explicit_country_code.get()
+    if explicit_country:
+        return explicit_country
+
+    if normalized_country and normalized_country != default_country:
+        return normalized_country
+
+    request_country = _request_country_code.get()
+    if request_country:
+        return request_country
+
+    return normalized_country or default_country
+
+
+def apply_effective_country_code(params: Optional[Union[dict, list]]) -> Optional[Union[dict, list]]:
+    if not params:
+        return params
+
+    if isinstance(params, dict):
+        if "countryCode" not in params:
+            return params
+
+        resolved_params = dict(params)
+        resolved_params["countryCode"] = resolve_country_code(resolved_params.get("countryCode"))
+        return resolved_params
+
+    if isinstance(params, list):
+        if not any(key == "countryCode" for key, _ in params):
+            return params
+
+        effective_country = resolve_country_code(
+            next((value for key, value in params if key == "countryCode"), None)
+        )
+        return [
+            (key, effective_country if key == "countryCode" else value)
+            for key, value in params
+        ]
+
+    return params
+
+
 async def make_request(url: str, token: Optional[str] = None, params: Optional[dict] = None, cred: Optional[dict] = None):
     if token is None:
         token, cred = await get_tidal_token_for_cred(cred=cred)
     client = await get_http_client()
     headers = {"authorization": f"Bearer {token}"}
+    params = apply_effective_country_code(params)
 
     try:
         for attempt in range(_RATE_LIMIT_MAX_RETRIES + 1):
@@ -456,6 +540,19 @@ async def make_request(url: str, token: Optional[str] = None, params: Optional[d
                         pass
                 delay = min(delay, _RATE_LIMIT_MAX_DELAY)
                 logger.warning("Upstream 429 for %s, retrying in %.1fs (attempt %d/%d)", url, delay, attempt + 1, _RATE_LIMIT_MAX_RETRIES)
+                await asyncio.sleep(delay)
+                continue
+
+            if 500 <= resp.status_code < 600 and attempt < _RATE_LIMIT_MAX_RETRIES:
+                delay = min(_UPSTREAM_5XX_BASE_DELAY * (2 ** attempt), _UPSTREAM_5XX_MAX_DELAY)
+                logger.warning(
+                    "Upstream %s for %s, retrying in %.1fs (attempt %d/%d)",
+                    resp.status_code,
+                    url,
+                    delay,
+                    attempt + 1,
+                    _RATE_LIMIT_MAX_RETRIES,
+                )
                 await asyncio.sleep(delay)
                 continue
 
@@ -501,6 +598,7 @@ async def authed_get_json(
 
     client = await get_http_client()
     headers = {"authorization": f"Bearer {token}"}
+    params = apply_effective_country_code(params)
     if extra_headers:
         headers.update({key: value for key, value in extra_headers.items() if value is not None})
 
@@ -525,6 +623,19 @@ async def authed_get_json(
                         pass
                 delay = min(delay, _RATE_LIMIT_MAX_DELAY)
                 logger.warning("Upstream 429 for %s, retrying in %.1fs (attempt %d/%d)", url, delay, attempt + 1, _RATE_LIMIT_MAX_RETRIES)
+                await asyncio.sleep(delay)
+                continue
+
+            if 500 <= resp.status_code < 600 and attempt < _RATE_LIMIT_MAX_RETRIES:
+                delay = min(_UPSTREAM_5XX_BASE_DELAY * (2 ** attempt), _UPSTREAM_5XX_MAX_DELAY)
+                logger.warning(
+                    "Upstream %s for %s, retrying in %.1fs (attempt %d/%d)",
+                    resp.status_code,
+                    url,
+                    delay,
+                    attempt + 1,
+                    _RATE_LIMIT_MAX_RETRIES,
+                )
                 await asyncio.sleep(delay)
                 continue
 
@@ -585,7 +696,7 @@ def build_home_request_params(
     limit: Optional[int] = None,
 ) -> dict:
     params = {
-        "countryCode": country_code,
+        "countryCode": resolve_country_code(country_code),
         "locale": locale,
         "deviceType": device_type,
         "platform": platform,
